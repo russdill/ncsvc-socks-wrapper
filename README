@@ -1,0 +1,22 @@
+ncsvc ld_preload wrapper
+
+This wraps ncsvc and with the addition of a branch of lwip:
+
+https://github.com/russdill/lwip/commits/tap-via-socks
+
+provides the VPN connection via a SOCKS proxy. This means that
+ncsvc no longer requires SUID root, renames /etc/resolv.conf,
+messes with routes, etc.
+
+Starting ncsvc:
+
+LD_PRELOAD=./ncsvc_preload.so ./ncsvc -h <host> -c <cookie> -f <certfile> \
+		[-l <log level, default 3>] [-p <proxy port, default 1080>]
+
+Where cookie contains a string like:
+
+	DSID=acc62ce6d75ba371380a5e54c01bb1ee
+
+And certfile is obtained from your host via:
+
+	./get_cert.sh <host> <certfile>
