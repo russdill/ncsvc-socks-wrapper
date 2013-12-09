@@ -65,6 +65,8 @@ void tun_ifconfig(u_int32_t ip, u_int32_t gw, u_int32_t netmask, int mtu)
 	dbg("%s\n", __func__);
 	if (write(tun_msg_fd, &msg, sizeof(msg)) < 0)
 		dbg("%s: write failed\n", __func__);
+
+	printf("Connected!\n");
 }
 
 static int tun_open(struct fd_info *info, const char *pathname)
