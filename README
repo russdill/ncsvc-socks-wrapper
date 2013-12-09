@@ -22,7 +22,7 @@ The tap-via-socks socks branch of lwip is required to build:
 
 https://github.com/russdill/lwip/commits/tap-via-socks
 
-32-bit libraries for libevent and libpap are also required.
+32-bit libraries for libevent and libpcap are also required.
 
 juniper-vpn-wrapper.py:
 
