@@ -332,11 +332,13 @@ packet_send(struct bufferevent *bev, struct packet_builder *pb)
 	free(pb);
 }
 
+#ifdef DEBUG
 static u_char
 rpc_get_u8(char *data)
 {
 	return *data;
 }
+#endif
 
 static u_int16_t
 rpc_get_u16(char *data)
@@ -350,11 +352,13 @@ rpc_get_u32(char *data)
 	return __get_unaligned_be((u_int32_t *) data);
 }
 
+#ifdef DEBUG
 static u_int64_t
 rpc_get_u64(char *data)
 {
 	return __get_unaligned_be((u_int64_t *) data);
 }
+#endif
 
 static u_int32_t
 rpc_get_ip(char *data)
@@ -440,6 +444,7 @@ ncsvc_process_dns(char *data, u_int32_t len)
 static void
 ncsvc_print_packet(struct packet_hdr *hdr, char *data)
 {
+#ifdef DEBUG
 	int i;
 	char *end;
 
@@ -447,9 +452,9 @@ ncsvc_print_packet(struct packet_hdr *hdr, char *data)
 		if (packet_ids[i].id == ntohl(hdr->msg_type)) break;
 
 	if (i == ARRAY_SIZE(packet_ids))
-		printf("Received REP_%02x message:\n", ntohl(hdr->msg_type));
+		dbg("%s: Received REP_%02x message:\n", __func__, ntohl(hdr->msg_type));
 	else
-		printf("Received %s message:\n", packet_ids[i].name);
+		dbg("%s: Received %s message:\n", __func__, packet_ids[i].name);
 
 	end = data + ntohl(hdr->packet_len);
 
@@ -472,9 +477,9 @@ ncsvc_print_packet(struct packet_hdr *hdr, char *data)
 			}
 
 		if (rpc_msg)
-			printf("\t%s(", rpc_msg->name);
+			dbg("%s: \t%s(", __func__, rpc_msg->name);
 		else
-			printf("\tRPC%02x(", id);
+			dbg("%s: \tRPC%02x(", __func__, id);
 
 		idx_data = data;
 		data += len;
@@ -529,11 +534,12 @@ ncsvc_print_packet(struct packet_hdr *hdr, char *data)
 				sprintf(tok_buf, "(Unknown type)");
 			}
 			idx_data += idx_len;
-			printf("%s%s='%s'", first ? "" : ", ", key, tok);
+			dbg_cont("%s%s='%s'", first ? "" : ", ", key, tok);
 			first = 0;
 		}
-		printf(")\n");
+		dbg_cont(")\n");
 	}
+#endif
 }
 
 static void
