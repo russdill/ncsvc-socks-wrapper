@@ -4,6 +4,7 @@
 #include "preload.h"
 #include "fd_info.h"
 #include "hashtable.h"
+#include "dbg.h"
 
 static DEFINE_HASHTABLE(fds, 8);
 static LIST_HEAD(listeners);
@@ -23,6 +24,17 @@ static struct fd_info *fd_find(int fd)
 	hash_for_each_possible(fds, info, node, fd)
 		if (info->fd == fd) return info;
 	return NULL;
+}
+
+void fd_grab(int fd, const struct fd_listener *l)
+{
+	struct fd_info *info;
+	dbg("%s(%d)\n", __func__, fd);
+	info = malloc(sizeof(*info));
+	memset(info, 0, sizeof(*info));
+	info->listener = (struct fd_listener *) l;
+	info->fd = fd;
+	hash_add(fds, &info->node, fd);
 }
 
 int fd_open(const char *pathname)
@@ -143,6 +155,76 @@ int fd_fstat(int fd, struct stat *stat_buf)
 	return ret;
 }
 
+int fd_getsockopt(int fd, int level, int name, void *val, socklen_t *len)
+{
+	struct fd_info *fd_info;
+	int ret = FD_NONE;
+
+	fd_info = fd_find(fd);
+	if (fd_info && fd_info->listener->getsockopt)
+		ret = fd_info->listener->getsockopt(fd_info, level, name, val, len);
+
+	return ret;
+}
+
+int fd_setsockopt(int fd, int level, int name, const void *val, socklen_t len)
+{
+	struct fd_info *fd_info;
+	int ret = FD_NONE;
+
+	fd_info = fd_find(fd);
+	if (fd_info && fd_info->listener->setsockopt)
+		ret = fd_info->listener->setsockopt(fd_info, level, name, val, len);
+
+	return ret;
+}
+
+int fd_getsockname(int fd, struct sockaddr *addr, socklen_t *len)
+{
+	struct fd_info *fd_info;
+	int ret = FD_NONE;
+
+	fd_info = fd_find(fd);
+	if (fd_info && fd_info->listener->getsockname)
+		ret = fd_info->listener->getsockname(fd_info, addr, len);
+
+	return ret;
+}
+
+ssize_t fd_recv(int fd, void *buf, size_t len, int flags)
+{
+	struct fd_info *fd_info;
+	int ret = FD_NONE;
+
+	fd_info = fd_find(fd);
+	if (fd_info && fd_info->listener->recv)
+		ret = fd_info->listener->recv(fd_info, buf, len, flags);
+	return ret;
+}
+
+ssize_t fd_send(int fd, const void *buf, size_t len, int flags)
+{
+	struct fd_info *fd_info;
+	int ret = FD_NONE;
+
+	fd_info = fd_find(fd);
+	if (fd_info && fd_info->listener->send)
+		ret = fd_info->listener->send(fd_info, buf, len, flags);
+	return ret;
+}
+
+ssize_t fd_recvfrom(int fd, void *buf, size_t len, int flags,
+			struct sockaddr *src_addr, socklen_t *addrlen)
+{
+	struct fd_info *fd_info;
+	int ret = FD_NONE;
+
+	fd_info = fd_find(fd);
+	if (fd_info && fd_info->listener->recvfrom)
+		ret = fd_info->listener->recvfrom(fd_info, buf, len, flags,
+						src_addr, addrlen);
+	return ret;
+}
 
 void fd_close(int fd)
 {

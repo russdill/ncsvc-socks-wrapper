@@ -1,3 +1,6 @@
+
+#undef _FORTIFY_SOURCE
+#include <features.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 
@@ -71,3 +74,75 @@ int socket(int domain, int type, int protocol)
 	return ret;
 }
 
+
+int getsockopt(int fd, int level, int name, void *val, socklen_t *len)
+{
+	static int (*orig_getsockopt)(int, int, int, void*, socklen_t*);
+	int ret;
+	ASSIGN(getsockopt);
+	ret = fd_getsockopt(fd, level, name, val, len);
+	if (ret == FD_NONE)
+		ret = orig_getsockopt(fd, level, name, val, len);
+	return ret;
+}
+
+int setsockopt(int fd, int level, int name, const void *val, socklen_t len)
+{
+	static int (*orig_setsockopt)(int, int, int, const void*, socklen_t);
+	int ret;
+	ASSIGN(setsockopt);
+	ret = fd_setsockopt(fd, level, name, val, len);
+	if (ret == FD_NONE)
+		ret = orig_setsockopt(fd, level, name, val, len);
+	return ret;
+}
+
+int getsockname(int fd, struct sockaddr *addr, socklen_t *len)
+{
+	static int (*orig_getsockname)(int, struct sockaddr*, socklen_t*);
+	int ret;
+	ASSIGN(getsockname);
+	ret = fd_getsockname(fd, addr, len);
+	if (ret == FD_NONE)
+		ret = orig_getsockname(fd, addr, len);
+	return ret;
+}
+
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
+			struct sockaddr *src_addr, socklen_t *addrlen)
+{
+
+	static ssize_t (*orig_recvfrom)(int, void*, size_t, int,
+				struct sockaddr*, socklen_t*);
+	int ret;
+	ASSIGN(recvfrom);
+	ret = fd_recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
+	if (ret == FD_NONE)
+		ret = orig_recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
+	dbg("%s(fd=%d) = %d\n", __func__, sockfd, ret);
+	return ret;
+}
+
+ssize_t recv(int sockfd, void *buf, size_t len, int flags)
+{
+	static ssize_t (*orig_recv)(int, void*, size_t, int);
+	int ret;
+	ASSIGN(recv);
+	ret = fd_recv(sockfd, buf, len, flags);
+	if (ret == FD_NONE)
+		ret = orig_recv(sockfd, buf, len, flags);
+	dbg("%s(fd=%d) = %d\n", __func__, sockfd, ret);
+	return ret;
+}
+
+ssize_t send(int sockfd, const void *buf, size_t len, int flags)
+{
+	static ssize_t (*orig_send)(int, const void*, size_t, int);
+	int ret;
+	ASSIGN(send);
+	ret = fd_send(sockfd, buf, len, flags);
+	if (ret == FD_NONE)
+		ret = orig_send(sockfd, buf, len, flags);
+	dbg("%s(fd=%d) = %d\n", __func__, sockfd, ret);
+	return ret;
+}
