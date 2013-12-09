@@ -1,4 +1,43 @@
-ncsvc ld_preload wrapper
+Juniper VPN wrappers:
+
+This package contains a set of LD_PRELOAD scripts and a python script that
+work together to provide command line, non-root access to a Juniper VPN
+server. It wraps the normally tap interface into a socks proxy. Connecting
+to a Juniper VPN server is as simple as:
+
+./juniper-vpn-wrap.py -h <host> -u <username>
+
+Once connected, a local proxy.pac file can be used to easily direct web
+traffic.
+
+Building:
+
+Building the LD_PRELOAD wrappers should be as simple as 'make install'. The
+ncsvc_preload.so will always build as 32 bit to match the ncsvc binary. The
+Makefile will try to detect the architecture of the java build (32 or 64)
+and build the tncc_preload.so binary appropriately. Both will be installed
+into ~/.juniper_networks/
+
+The tap-via-socks socks branch of lwip is required to build:
+
+https://github.com/russdill/lwip/commits/tap-via-socks
+
+32-bit libraries for libevent and libpap are also required.
+
+juniper-vpn-wrapper.py:
+
+This logs into the VPN host and passes login information from the user. It
+downloads tncc.jar, ncLinuxApp.jar, and the certificate as necessary. It
+requires the tncc_preload.so and ncsvc_preload.so libraries to function.
+
+tncc LD_PRELOAD wrapper:
+
+The tncc auth wrapper just provides a simpler method of communicating
+with the app. Instead of listening on a random localhost port and then
+communicating that with a file, input is passed on stdin, and output read
+out on stdout.
+
+ncsvc LD_PRELOAD wrapper:
 
 This wraps ncsvc and with the addition of a branch of lwip:
 
@@ -17,6 +56,4 @@ Where cookie contains a string like:
 
 	DSID=acc62ce6d75ba371380a5e54c01bb1ee
 
-And certfile is obtained from your host via:
-
-	./get_cert.sh <host> <certfile>
+And certfile is a DER formatted certificate from your server.
