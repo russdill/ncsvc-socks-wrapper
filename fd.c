@@ -49,6 +49,19 @@ int close(int fd)
 	return real_close(fd);
 }
 
+int real_dup2(int old, int _new)
+{
+	static int (*orig_dup2)(int, int);
+	ASSIGN(dup2);
+	return orig_dup2(old, _new);
+}
+
+int dup2(int old, int _new)
+{
+	fd_close(_new);
+	return real_dup2(old, _new);
+}
+
 int __fxstat(int ver, int fd, struct stat *stat_buf)
 {
 	static int (*orig___fxstat)(int ver, int fd, struct stat *stat_buf);

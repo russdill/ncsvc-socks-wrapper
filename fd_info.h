@@ -58,6 +58,7 @@ int fd_fstat(int fd, struct stat *stat_buf);
 void fd_close(int fd);
 
 int real_close(int fd);
+int real_dup2(int, int);
 
 struct stat;
 void stat_add_intercept(int (*stat)(const char*, struct stat*));

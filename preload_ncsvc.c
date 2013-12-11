@@ -263,7 +263,7 @@ int ncsvc_bind(struct fd_info *info, const struct sockaddr *addr, socklen_t len)
 
 	socketpair(AF_LOCAL, SOCK_SEQPACKET, 0, fds);
 	real_close(info->fd);
-	dup2(fds[0], info->fd);
+	real_dup2(fds[0], info->fd);
 	real_close(fds[0]);
 	info->ctx = (void *) fds[1];
 
