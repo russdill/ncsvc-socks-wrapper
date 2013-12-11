@@ -229,7 +229,6 @@ static const struct msg_rpc rpc_rx_msgs[] = {
 	},
 };
 
-
 struct msg_rpc rpc_tx_msgs[] = {
 	{
 		.rpc_id = 0x00,
@@ -441,6 +440,30 @@ ncsvc_process_dns(char *data, u_int32_t len)
 	}
 }
 
+static u_int32_t
+ncsvc_process_disconnect(char *data, u_int32_t len)
+{
+	char *end = data + len;
+	u_int32_t ret = 0;
+
+	dbg("%s\n", __func__);
+	while (data < end) {
+		u_int16_t idx;
+		u_int32_t len;
+
+		idx = rpc_get_u16(data);
+		len = rpc_get_u32(data + 2);
+		data += 6;
+
+		switch (idx) {
+		case 1:
+			ret = rpc_get_u32(data);
+		}
+		data += len;
+	}
+	return ret;
+}
+
 static void
 ncsvc_print_packet(struct packet_hdr *hdr, char *data)
 {
@@ -548,6 +571,8 @@ ncsvc_process_packet(struct bufferevent *bev, struct packet_hdr *hdr, char *data
 	struct packet_builder *pb;
 	char *end;
 	int is_status2 = 0;
+	int is_failure = 0;
+	int reason = 0;
 
 	end = data + ntohl(hdr->packet_len);
 
@@ -573,7 +598,7 @@ ncsvc_process_packet(struct bufferevent *bev, struct packet_hdr *hdr, char *data
 		packet_send(bev, packet_new(REQ_STATUS2, 1));
 		break;
 	case REP_FAILURE:
-		exit(1);
+		is_failure = 1;
 		break;
 	case REP_STATUS1:
 		break;
@@ -599,6 +624,9 @@ ncsvc_process_packet(struct bufferevent *bev, struct packet_hdr *hdr, char *data
 		case RPC_DNS:
 			ncsvc_process_dns(data, len);
 			break;
+		case RPC_DISCONNECT:
+			reason = ncsvc_process_disconnect(data, len);
+			break;
 		}
 
 		data += len;
@@ -606,6 +634,10 @@ ncsvc_process_packet(struct bufferevent *bev, struct packet_hdr *hdr, char *data
 
 	if (is_status2)
 		tun_ifconfig(ip, gw, netmask, mtu - 40);
+	else if (is_failure) {
+		printf("Disconnected, reason code %d\n", reason);
+		exit(reason);
+	}
 }
 
 static void
