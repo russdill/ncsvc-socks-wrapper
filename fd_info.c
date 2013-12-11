@@ -231,8 +231,9 @@ void fd_close(int fd)
 	struct fd_info *fd_info;
 
 	fd_info = fd_find(fd);
-	if (fd_info && fd_info->listener->close) {
-		fd_info->listener->close(fd_info);
+	if (fd_info) {
+		if (fd_info->listener->close)
+			fd_info->listener->close(fd_info);
 		hash_del(&fd_info->node);
 		free(fd_info);
 	}
