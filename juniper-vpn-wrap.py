@@ -143,6 +143,7 @@ class juniper_vpn_wrapper(object):
             self.key = getpass.getpass('Two-factor key:')
         self.br.select_form(nr=0)
         self.br.form['password'] = self.key
+        self.key = None
         self.r = self.br.submit()
 
     def action_continue(self):
