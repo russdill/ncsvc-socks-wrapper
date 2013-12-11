@@ -7,7 +7,7 @@
 
 
 #ifdef DEBUG
-#define dbg(fmt, arg...) printf("ncui_preload[%d]: " fmt, getpid(), ##arg)
+#define dbg(fmt, arg...) printf(APP_NAME "_preload[%d]: " fmt, getpid(), ##arg)
 #define dbg_cont(fmt, arg...) printf(fmt, ##arg)
 #else
 #define dbg(fmt, arg...) do {} while(0)
