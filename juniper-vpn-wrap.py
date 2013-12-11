@@ -13,6 +13,8 @@ import socket
 import ssl
 import errno
 import argparse
+import atexit
+import signal
 
 def mkdir_p(path):
     try:
@@ -23,206 +25,313 @@ def mkdir_p(path):
         else:
             raise
 
+class juniper_vpn_wrapper(object):
+    def __init__(self, vpn_host, username, socks_port):
+        self.vpn_host = vpn_host
+        self.username = username
+        self.socks_port = socks_port
 
-def tncc(host, dspreauth, dssignin):
+        self.br = mechanize.Browser()
 
-    class_names = ('net.juniper.tnc.NARPlatform.linux.LinuxHttpNAR',
-                   'net.juniper.tnc.HttpNAR.HttpNAR')
-    class_name = None
+        self.cj = cookielib.LWPCookieJar()
+        self.br.set_cookiejar(self.cj)
 
-    tncc_jar = os.path.expanduser('~/.juniper_networks/tncc.jar')
-    try:
-        if zipfile.ZipFile(tncc_jar, 'r').testzip() is not None:
-            raise Exception()
-    except:
-        print 'Downloading tncc.jar...'
-        mkdir_p(os.path.expanduser('~/.juniper_networks'))
-        urllib.urlretrieve('https://' + host
-                           + '/dana-cached/hc/tncc.jar', tncc_jar)
+        # Browser options
+        self.br.set_handle_equiv(True)
+        self.br.set_handle_redirect(True)
+        self.br.set_handle_referer(True)
+        self.br.set_handle_robots(False)
 
-    with zipfile.ZipFile(tncc_jar, 'r') as jar:
-        for name in class_names:
+        # Follows refresh 0 but not hangs on refresh > 0
+        self.br.set_handle_refresh(mechanize._http.HTTPRefreshProcessor(),
+                              max_time=1)
+
+        # Want debugging messages?
+        #self.br.set_debug_http(True)
+        #self.br.set_debug_redirects(True)
+        #self.br.set_debug_responses(True)
+
+        self.user_agent = 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1) Gecko/2008071615 Fedora/3.0.1-1.fc9 Firefox/3.0.1'
+        self.br.addheaders = [('User-agent', self.user_agent)]
+
+        self.last_action = None
+        self.password = None
+        self.tncc_process = None
+        self.needs_2factor = False
+        self.key = None
+
+        self.tncc_jar = None
+        self.ncsvc_bin = None
+
+    def find_cookie(self, name):
+        for cookie in self.cj:
+            if cookie.name == name:
+                return cookie
+        return None
+
+    def next_action(self):
+        if self.find_cookie('DSID'):
+            return 'ncsvc'
+
+        for form in self.br.forms():
+            if form.name == 'frmLogin':
+                return 'login'
+            elif form.name == 'frmDefender':
+                return 'key'
+            elif form.name == 'frmConfirmation':
+                return 'continue'
+            else:
+                raise Exception('Unknown form type:', form.name)
+        return 'tncc'
+
+    def run(self):
+        # Open landing page
+        self.r = self.br.open('https://' + self.vpn_host)
+        while True:
+            action = self.next_action()
+            if action == 'tncc':
+                self.action_tncc()
+            elif action == 'login':
+                self.action_login()
+            elif action == 'key':
+                self.action_key()
+            elif action == 'continue':
+                self.action_continue()
+            elif action == 'ncsvc':
+                self.action_ncsvc()
+
+            self.last_action = action
+
+    def action_tncc(self):
+        # Run tncc host checker
+        result = self.tncc_start()
+        if result != '200':
+            if self.last_action == 'tncc':
+                raise Exception('tncc returned non 200 code (' + result + ')')
+            else:
+                self.cj.clear(self.vpn_host, '/dana-na/', 'DSPREAUTH')
+        self.r = self.br.open(self.r.geturl())
+
+    def action_login(self):
+        # The token used for two-factor is selected when this form is submitted.
+        # If we aren't getting a password, then get the key now, otherwise
+        # we could be sitting on the two factor key prompt later on waiting
+        # on the user.
+
+        if self.password is None or self.last_action == 'login':
+            self.password = getpass.getpass('Password:')
+            self.needs_2factor = False
+
+        if self.needs_2factor:
+            self.key = getpass.getpass('Two-factor key:')
+        else:
+            self.key = None
+
+        # Enter username/password
+        self.br.select_form(nr=0)
+        self.br.form['username'] = self.username
+        self.br.form['password'] = self.password
+        # Untested, a list of availables realms is provided when this
+        # is necessary.
+        # self.br.form['realm'] = [realm]
+        self.r = self.br.submit()
+
+    def action_key(self):
+        # Enter key
+        self.needs_2factor = True
+        if self.key is None:
+            self.key = getpass.getpass('Two-factor key:')
+        self.br.select_form(nr=0)
+        self.br.form['password'] = self.key
+        self.r = self.br.submit()
+
+    def action_continue(self):
+        # Yes, I want to terminate the existing connection
+        self.br.select_form(nr=0)
+        self.r = self.br.submit()
+
+    def action_ncsvc(self):
+        dspreauth_cookie = self.find_cookie('DSPREAUTH')
+        if dspreauth_cookie is not None:
+            self.tncc_send('setcookie', [('Cookie', dspreauth_cookie.value)])
+        if self.ncsvc_start() == 3:
+            # Code 3 indicates that the DSID we tried was invalid
+            self.cj.clear(self.vpn_host, '/', 'DSID')
+            self.r = self.br.open(self.r.geturl())
+
+    def tncc_send(self, cmd, params):
+        if not self.tncc_socket:
+            return
+        v = cmd + '\n'
+        for key, val in params:
+            v = v + key + '=' + val + '\n'
+        self.tncc_socket.send(v)
+
+    def tncc_recv(self):
+        if not self.tncc_socket:
+            return []
+        ret = self.tncc_socket.recv(1024)
+        return ret.splitlines()
+
+    def tncc_init(self):
+        class_names = ('net.juniper.tnc.NARPlatform.linux.LinuxHttpNAR',
+                       'net.juniper.tnc.HttpNAR.HttpNAR')
+        self.class_name = None
+
+        self.tncc_jar = os.path.expanduser('~/.juniper_networks/tncc.jar')
+        try:
+            if zipfile.ZipFile(self.tncc_jar, 'r').testzip() is not None:
+                raise Exception()
+        except:
+            print 'Downloading tncc.jar...'
+            mkdir_p(os.path.expanduser('~/.juniper_networks'))
+            urllib.urlretrieve('https://' + self.vpn_host
+                               + '/dana-cached/hc/tncc.jar', self.tncc_jar)
+
+        with zipfile.ZipFile(self.tncc_jar, 'r') as jar:
+            for name in class_names:
+                try:
+                    jar.getinfo(name.replace('.', '/') + '.class')
+                    self.class_name = name
+                    break
+                except:
+                    pass
+
+        if self.class_name is None:
+            raise Exception('Could not find class name for', self.tncc_jar)
+
+        self.tncc_preload = \
+            os.path.expanduser('~/.juniper_networks/tncc_preload.so')
+        if not os.path.isfile(self.tncc_preload):
+            raise Exception('Missing', self.tncc_preload)
+
+    def tncc_stop(self):
+        if self.tncc_process is not None:
             try:
-                jar.getinfo(name.replace('.', '/') + '.class')
-                class_name = name
-                break
+                self.tncc_process.terminate()
             except:
                 pass
+            self.tncc_socket = None
+            self.tncc_process.wait()
 
-    if class_name is None:
-        raise Exception('Could not find class name for', tncc_jar)
+    def tncc_start(self):
+        # tncc is the host checker app. It can check different
+        # secrurity policies of the host and report back. We have
+        # to send it a preauth key (from the DSPREAUTH cookie)
+        # and it sends back a new cookie value we submit.
+        # After logging in, we send back another cookie to tncc.
+        # Subsequently, it contacts https://<vpn_host:443 every
+        # 10 minutes.
 
-    tncc_preload = \
-        os.path.expanduser('~/.juniper_networks/tncc_preload.so')
-    if not os.path.isfile(tncc_preload):
-        raise Exception('Missing', tncc_preload)
+        if not self.tncc_jar:
+            self.tncc_init()
 
-    p = subprocess.Popen(['java',
-        '-classpath', tncc_jar, class_name,
-        'log_level', '2',
-        'postRetries', '6',
-        'ivehost', host,
-        'home_dir', os.path.expanduser('~'),
-        'Parameter0', '',
-        'user_agent', 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1) Gecko/2008071615 Fedora/3.0.1-1.fc9 Firefox/3.0.1',
-        ], env={'LD_PRELOAD': tncc_preload}, stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.tncc_stop()
 
-    (stdout, stderr) = p.communicate('start\n' + 'IC=' + host
-            + '\nCookie=' + dspreauth + '\nDSSIGNIN=' + dssignin + '\n')
-
-    results = stdout.split('\n', 5)
-    if len(results) < 5:
-        raise Exception('tncc returned insuficent results', results)
-
-    result = results[1]
-    if result != '200':
-        raise Exception('tncc returned non 200 code')
-
-    return results[3]
-
-
-def ncsvc(br, host, cookie, socks_port):
-    ncLinuxApp_jar = os.path.expanduser('~/.juniper_networks/ncLinuxApp.jar')
-    ncsvc_bin = os.path.expanduser('~/.juniper_networks/ncsvc')
-    ncsvc_preload = os.path.expanduser('~/.juniper_networks/ncsvc_preload.so')
-    try:
-        if zipfile.ZipFile(ncLinuxApp_jar, 'r').testzip() is not None:
-            raise Exception()
-    except:
-        print 'Downloading ncLinuxApp.jar...'
-        mkdir_p(os.path.expanduser('~/.juniper_networks'))
-        br.retrieve('https://' + host + '/dana-cached/nc/ncLinuxApp.jar',
-                    ncLinuxApp_jar)
-
-    with zipfile.ZipFile(ncLinuxApp_jar, 'r') as jar:
-        jar.extract('ncsvc', os.path.expanduser('~/.juniper_networks/'))
-
-    os.chmod(ncsvc_bin, 0755)
-
-    if not os.path.isfile(ncsvc_preload):
-        raise Exception('Missing', ncsvc_preload)
-
-    # FIXME: This should really be form the webclient connection,
-    # and the web client should verify the cert
-
-    s = socket.socket()
-    s.connect((host, 443))
-    ss = ssl.wrap_socket(s)
-    cert = ss.getpeercert(True)
-    certfile = os.path.expanduser('~/.juniper_networks/' + host
-                                  + '.cert')
-    with open(certfile, 'w') as f:
-        f.write(cert)
-
-    os.execve(ncsvc_bin, [ncsvc_bin,
-        '-h', vpn_host,
-        '-c', 'DSID=' + dsid_cookie.value,
-        '-f', certfile,
-        '-p', str(socks_port),
-        '-l', '0',
-        ], {'LD_PRELOAD': ncsvc_preload})
-    raise Exception('Failed to exec ncsvc')
-
-
-def find_cookie(cj, name):
-    for cookie in cj:
-        if cookie.name == name:
-            return cookie
-    return None
-
-parser = argparse.ArgumentParser(conflict_handler='resolve')
-parser.add_argument('-h', '--host', type=str, required=True,
-                    help='VPN host name')
-parser.add_argument('-u', '--user', type=str, required=True,
-                    help='User name')
-parser.add_argument('-p', '--socks_port', type=int, default=1080,
-                    help='Socks proxy port (default: %(default))')
-
-args = parser.parse_args()
-
-vpn_host = args.host
-username = args.user
-socks_port = args.socks_port
-
-# Browser
-br = mechanize.Browser()
-
-# Cookie Jar
-cj = cookielib.LWPCookieJar()
-br.set_cookiejar(cj)
-
-# Browser options
-br.set_handle_equiv(True)
-br.set_handle_redirect(True)
-br.set_handle_referer(True)
-br.set_handle_robots(False)
-
-# Follows refresh 0 but not hangs on refresh > 0
-br.set_handle_refresh(mechanize._http.HTTPRefreshProcessor(),
-                      max_time=1)
-
-# Want debugging messages?
-# br.set_debug_http(True)
-# br.set_debug_redirects(True)
-# br.set_debug_responses(True)
-
-br.addheaders = [('User-agent',
-                 'Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.0.1) Gecko/2008071615 Fedora/3.0.1-1.fc9 Firefox/3.0.1'
-                 )]
-
-# Open landing page
-r = br.open('https://' + vpn_host)
-
-while True:
-    dsid_cookie = find_cookie(cj, 'DSID')
-    if dsid_cookie:
-        ncsvc(br, vpn_host, dsid_cookie.value, socks_port)
-
-    action = 'tncc'
-    for form in br.forms():
-        if form.name == 'frmLogin':
-            action = 'login'
-        elif form.name == 'frmDefender':
-            action = 'key'
-        else:
-            raise Exception('Unknown form type:', form.name)
-        break
-
-    if action == 'tncc':
-
-        # Run tncc host checker
-        dspreauth_cookie = find_cookie(cj, 'DSPREAUTH')
+        dspreauth_cookie = self.find_cookie('DSPREAUTH')
         if dspreauth_cookie is None:
             raise Exception('Could not find DSPREAUTH key for host checker')
 
-        dssignin_cookie = find_cookie(cj, 'DSSIGNIN')
+        dssignin_cookie = self.find_cookie('DSSIGNIN')
         dssignin = (dssignin_cookie.value if dssignin_cookie else 'null')
-        dspreauth = tncc(vpn_host, dspreauth_cookie.value, dssignin)
-        if dspreauth is None:
-            raise Exception('Host checker failed')
-        dspreauth_cookie.value = dspreauth
-        cj.set_cookie(dspreauth_cookie)
 
-        # Submit cooke from tncc host checker
-        r = br.open(r.geturl())
+        self.tncc_socket, sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 
-    elif action == 'login':
+        p = subprocess.Popen(['java',
+            '-classpath', self.tncc_jar, self.class_name,
+            'log_level', '2',
+            'postRetries', '6',
+            'ivehost', self.vpn_host,
+            'home_dir', os.path.expanduser('~'),
+            'Parameter0', '',
+            'user_agent', self.user_agent,
+            ], env={'LD_PRELOAD': self.tncc_preload}, stdin=sock)
+        #stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        password = getpass.getpass('Password:')
+        self.tncc_send('start', [('IC', self.vpn_host),
+                        ('Cookie', dspreauth_cookie.value), ('DSSIGNIN', dssignin)])
+        results = self.tncc_recv()
+        result = results[0] if len(results) >= 4 else None
 
-        # Enter username/password
-        br.select_form(nr=0)
-        br.form['username'] = username
-        br.form['password'] = password
-        r = br.submit()
+        if result == '200':
+            dspreauth_cookie.value = results[2]
+            self.cj.set_cookie(dspreauth_cookie)
+            self.tncc_process = p
+        else:
+            self.tncc_stop()
+            if len(results) < 4:
+                raise Exception('tncc returned insuficent results', results)
 
-    elif action == 'key':
+        return result
 
-        key = getpass.getpass('Two-factor key:')
+    def ncsvc_init(self):
+        ncLinuxApp_jar = os.path.expanduser('~/.juniper_networks/ncLinuxApp.jar')
+        self.ncsvc_bin = os.path.expanduser('~/.juniper_networks/ncsvc')
+        self.ncsvc_preload = os.path.expanduser('~/.juniper_networks/ncsvc_preload.so')
+        try:
+            if zipfile.ZipFile(ncLinuxApp_jar, 'r').testzip() is not None:
+                raise Exception()
+        except:
+            # Note, we need the authenticated connection to download this jar
+            print 'Downloading ncLinuxApp.jar...'
+            mkdir_p(os.path.expanduser('~/.juniper_networks'))
+            self.br.retrieve('https://' + self.vpn_host + '/dana-cached/nc/ncLinuxApp.jar',
+                        ncLinuxApp_jar)
 
-        # Enter key
-        br.select_form(nr=0)
-        br.form['password'] = key
-        r = br.submit()
+        with zipfile.ZipFile(ncLinuxApp_jar, 'r') as jar:
+            jar.extract('ncsvc', os.path.expanduser('~/.juniper_networks/'))
+
+        os.chmod(self.ncsvc_bin, 0755)
+
+        if not os.path.isfile(self.ncsvc_preload):
+            raise Exception('Missing', self.ncsvc_preload)
+
+        # FIXME: This should really be form the webclient connection,
+        # and the web client should verify the cert
+
+        s = socket.socket()
+        s.connect((self.vpn_host, 443))
+        ss = ssl.wrap_socket(s)
+        cert = ss.getpeercert(True)
+        self.certfile = os.path.expanduser('~/.juniper_networks/' + self.vpn_host
+                                      + '.cert')
+        with open(self.certfile, 'w') as f:
+            f.write(cert)
+
+    def ncsvc_start(self):
+        if self.ncsvc_bin is None:
+            self.ncsvc_init()
+
+        dsid_cookie = self.find_cookie('DSID')
+        p = subprocess.Popen([self.ncsvc_bin,
+            '-h', self.vpn_host,
+            '-c', 'DSID=' + dsid_cookie.value,
+            '-f', self.certfile,
+            '-p', str(self.socks_port),
+            '-l', '0',
+            ], env={'LD_PRELOAD': self.ncsvc_preload})
+        ret = p.wait()
+        # 9 - certificate mismatch
+        # 6 - closed after being open for a while
+        #   - could not connect to host
+        # 3 - incorrect DSID
+        return ret
+
+def cleanup():
+    os.killpg(0, signal.SIGTERM)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(conflict_handler='resolve')
+    parser.add_argument('-h', '--host', type=str, required=True,
+                        help='VPN host name')
+    parser.add_argument('-u', '--user', type=str, required=True,
+                        help='User name')
+    parser.add_argument('-p', '--socks_port', type=int, default=1080,
+                        help='Socks proxy port (default: %(default))')
+
+    args = parser.parse_args()
+
+    atexit.register(cleanup)
+    jvpn = juniper_vpn_wrapper(args.host, args.user, args.socks_port)
+    jvpn.run()
 
