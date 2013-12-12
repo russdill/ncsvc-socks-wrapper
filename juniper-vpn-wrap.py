@@ -104,12 +104,37 @@ class juniper_vpn_wrapper(object):
 
     def action_tncc(self):
         # Run tncc host checker
-        result = self.tncc_start()
-        if result != '200':
-            if self.last_action == 'tncc':
-                raise Exception('tncc returned non 200 code (' + result + ')')
-            else:
-                self.cj.clear(self.vpn_host, '/dana-na/', 'DSPREAUTH')
+        dspreauth_cookie = self.find_cookie('DSPREAUTH')
+        if dspreauth_cookie is None:
+            raise Exception('Could not find DSPREAUTH key for host checker')
+
+        dssignin_cookie = self.find_cookie('DSSIGNIN')
+        dssignin = (dssignin_cookie.value if dssignin_cookie else 'null')
+
+        if not self.tncc_process:
+            self.tncc_start()
+
+        args = [('IC', self.vpn_host), ('Cookie', dspreauth_cookie.value), ('DSSIGNIN', dssignin)]
+
+        try:
+            self.tncc_send('start', args)
+            results = self.tncc_recv()
+        except:
+            self.tncc_start()
+            self.tncc_send('start', args)
+            results = self.tncc_recv()
+
+        if len(results) < 4:
+            raise Exception('tncc returned insufficent results', results)
+
+        if results[0] == '200':
+            dspreauth_cookie.value = results[2]
+            self.cj.set_cookie(dspreauth_cookie)
+        elif self.last_action == 'tncc':
+            raise Exception('tncc returned non 200 code (' + result[0] + ')')
+        else:
+            self.cj.clear(self.vpn_host, '/dana-na/', 'DSPREAUTH')
+
         self.r = self.br.open(self.r.geturl())
 
     def action_login(self):
@@ -154,23 +179,23 @@ class juniper_vpn_wrapper(object):
     def action_ncsvc(self):
         dspreauth_cookie = self.find_cookie('DSPREAUTH')
         if dspreauth_cookie is not None:
-            self.tncc_send('setcookie', [('Cookie', dspreauth_cookie.value)])
+            try:
+                self.tncc_send('setcookie', [('Cookie', dspreauth_cookie.value)])
+            except:
+                # TNCC died, bummer
+                self.tncc_stop()
         if self.ncsvc_start() == 3:
             # Code 3 indicates that the DSID we tried was invalid
             self.cj.clear(self.vpn_host, '/', 'DSID')
             self.r = self.br.open(self.r.geturl())
 
     def tncc_send(self, cmd, params):
-        if not self.tncc_socket:
-            return
         v = cmd + '\n'
         for key, val in params:
             v = v + key + '=' + val + '\n'
         self.tncc_socket.send(v)
 
     def tncc_recv(self):
-        if not self.tncc_socket:
-            return []
         ret = self.tncc_socket.recv(1024)
         return ret.splitlines()
 
@@ -227,18 +252,10 @@ class juniper_vpn_wrapper(object):
         if not self.tncc_jar:
             self.tncc_init()
 
-        self.tncc_stop()
-
-        dspreauth_cookie = self.find_cookie('DSPREAUTH')
-        if dspreauth_cookie is None:
-            raise Exception('Could not find DSPREAUTH key for host checker')
-
-        dssignin_cookie = self.find_cookie('DSSIGNIN')
-        dssignin = (dssignin_cookie.value if dssignin_cookie else 'null')
-
         self.tncc_socket, sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        null = open(os.devnull, 'w')
 
-        p = subprocess.Popen(['java',
+        self.tncc_process = subprocess.Popen(['java',
             '-classpath', self.tncc_jar, self.class_name,
             'log_level', '2',
             'postRetries', '6',
@@ -246,24 +263,7 @@ class juniper_vpn_wrapper(object):
             'home_dir', os.path.expanduser('~'),
             'Parameter0', '',
             'user_agent', self.user_agent,
-            ], env={'LD_PRELOAD': self.tncc_preload}, stdin=sock)
-        #stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-        self.tncc_send('start', [('IC', self.vpn_host),
-                        ('Cookie', dspreauth_cookie.value), ('DSSIGNIN', dssignin)])
-        results = self.tncc_recv()
-        result = results[0] if len(results) >= 4 else None
-
-        if result == '200':
-            dspreauth_cookie.value = results[2]
-            self.cj.set_cookie(dspreauth_cookie)
-            self.tncc_process = p
-        else:
-            self.tncc_stop()
-            if len(results) < 4:
-                raise Exception('tncc returned insuficent results', results)
-
-        return result
+            ], env={'LD_PRELOAD': self.tncc_preload}, stdin=sock, stdout=null)
 
     def ncsvc_init(self):
         ncLinuxApp_jar = os.path.expanduser('~/.juniper_networks/ncLinuxApp.jar')
