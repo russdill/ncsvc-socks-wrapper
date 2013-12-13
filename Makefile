@@ -51,16 +51,16 @@ $(NCSVC_OBJS): | $(NCSVC_OBJDIR)
 $(TNCC_OBJS): | $(TNCC_OBJDIR)
 
 $(NCSVC_OBJDIR)/ncsvc_preload.so: $(NCSVC_OBJS) | $(NCSVC_OBJDIR)
-	$(CC) $(CFLAGS) -DAPP_NAME=\"ncsvc\" $(LDFLAGS) -m32 -shared -Wl,-soname,$@ -o $@ $^ $(LIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -m32 -shared -Wl,-soname,$@ -o $@ $^ $(LIBS)
 
 $(TNCC_OBJDIR)/tncc_preload.so: $(TNCC_OBJS) | $(TNCC_OBJDIR)
-	$(CC) $(CFLAGS) -DAPP_NAME=\"tncc\" $(LDFLAGS) $(JAVA_32) -shared -Wl,-soname,$@ -o $@ $^ -ldl
+	$(CC) $(CFLAGS) $(LDFLAGS) $(JAVA_32) -shared -Wl,-soname,$@ -o $@ $^ -ldl
 
 $(NCSVC_OBJDIR)/%.o: %.c
-	$(CC) $(CFLAGS) -m32 -c $< -o $@
+	$(CC) $(CFLAGS) -DAPP_NAME=\"ncsvc\" -m32 -c $< -o $@
 
 $(TNCC_OBJDIR)/%.o: %.c
-	$(CC) $(CFLAGS) $(JAVA_32) -c $< -o $@
+	$(CC) $(CFLAGS) -DAPP_NAME=\"tncc\" $(JAVA_32) -c $< -o $@
 
 DESTDIR=$(HOME)/.juniper_networks
 
