@@ -23,10 +23,17 @@
 #include "fd_info.h"
 #include "preload.h"
 #include "ncsvc_main.h"
+#include "ping.h"
 
 struct tun_ctx {
 	int fds[2];
 	void *data;
+	struct icmp_data *ping_data;
+	u_int32_t ping_target;
+	struct event *ping_send_ev;
+	struct event *ping_timeout_ev;
+	int ping_timeout;
+	struct timespec ping_start_ts;
 	struct list_head node;
 };
 
@@ -42,7 +49,6 @@ struct tun_msg {
 	enum msg_id cmd;
 	struct tun_ctx *ctx;
 	int header;
-	struct tunif_data *data;
 	u_int32_t ip;
 	u_int32_t gw;
 	u_int32_t netmask;
@@ -137,7 +143,7 @@ static void tun_close(struct fd_info *info)
 	if (ctx->data) {
 		struct tun_msg msg = {
 			.cmd = TUNIF_DEL,
-			.data = ctx->data,
+			.ctx = ctx,
 		};
 		dbg("%s: Closing tun device\n", __func__);
 		if (write(tun_msg_fd, &msg, sizeof(msg)) < 0)
@@ -154,12 +160,77 @@ static struct fd_listener tun_listener = {
 	.close = tun_close,
 };
 
-static void
-process_msg(evutil_socket_t fd, short events, void *ctx)
+static void ping_timeout(evutil_socket_t fd, short events, void *_ctx)
 {
-	struct event_base *base = ctx;
-	struct tunif_data *data;
+	struct tun_ctx *ctx = _ctx;
+	ctx->ping_timeout = 1;
+	dbg("%s\n", __func__);
+}
+
+#define timespec_sub(a, b, result)					\
+	do {								\
+		(result)->tv_sec = (a)->tv_sec - (b)->tv_sec;		\
+		(result)->tv_nsec = (a)->tv_nsec - (b)->tv_nsec;	\
+		if ((result)->tv_nsec < 0) {				\
+			--(result)->tv_sec;				\
+			(result)->tv_nsec += 1000000000;		\
+		}							\
+	} while (0)
+
+
+static void ping_reply(void *arg)
+{
+	struct tun_ctx *ctx = arg;
+	event_del(ctx->ping_timeout_ev);
+#ifdef DEBUG
+	if (!ctx->ping_timeout) {
+		struct timespec ping_end_ts;
+		struct timespec diff_ts;
+		unsigned long ms;
+		clock_gettime(CLOCK_MONOTONIC_COARSE, &ping_end_ts);
+		timespec_sub(&ping_end_ts, &ctx->ping_start_ts, &diff_ts);
+		ms = diff_ts.tv_sec * 1000 + diff_ts.tv_nsec / 1000000;
+		dbg("%s: %ld ms\n", __func__, ms);
+	}
+#endif
+}
+
+static void ping_send(evutil_socket_t fd, short events, void *_ctx)
+{
+	struct tun_ctx *ctx = _ctx;
+	struct timeval tv = { .tv_sec = 3 };
+	ctx->ping_timeout = 0;
+	clock_gettime(CLOCK_MONOTONIC_COARSE, &ctx->ping_start_ts);
+	event_add(ctx->ping_timeout_ev, &tv);
+	icmp_send_ping(ctx->ping_data, ctx->ping_target);
+}
+
+
+static void tun_ping_init(struct event_base *base, struct tun_ctx *ctx,
+							u_int32_t target)
+{
+	struct timeval tv = { .tv_sec = 120 };
+
+	ctx->ping_target = target;
+	ctx->ping_timeout_ev = event_new(base, -1, 0, ping_timeout, ctx);
+	ctx->ping_data = icmp_init(ping_reply, ctx);
+	ctx->ping_send_ev = event_new(base, -1, EV_PERSIST, ping_send, ctx);
+	event_add(ctx->ping_send_ev, &tv);
+}
+
+static void tun_ping_cleanup(struct tun_ctx *ctx)
+{
+	event_free(ctx->ping_send_ev);
+	event_free(ctx->ping_timeout_ev);
+	icmp_cleanup(ctx->ping_data);
+}
+
+static void
+process_msg(evutil_socket_t fd, short events, void *_ctx)
+{
+	struct event_base *base = _ctx;
 	struct tun_msg msg;
+	struct tun_ctx *ctx;
 
 	if (read(fd, &msg, sizeof(msg)) <= 0)
 		return;
@@ -172,24 +243,26 @@ process_msg(evutil_socket_t fd, short events, void *ctx)
 
 	case TUNIF_DEL:
 		dbg("%s: Removing tunnel\n", __func__);
-		tunif_del(msg.data);
+		tun_ping_cleanup(msg.ctx);
+		tunif_del(msg.ctx->data);
 		break;
 
 	case TUNIF_IFCONFIG:
 		if (list_empty(&tuns))
 			break;
 		dbg("%s: Configuring tunnel\n", __func__);
-		data = list_first_entry(&tuns, struct tun_ctx, node)->data;
+		ctx = list_first_entry(&tuns, struct tun_ctx, node);
 
 		if (msg.ip)
-			tunif_set_ipaddr(data, msg.ip);
+			tunif_set_ipaddr(ctx->data, msg.ip);
 		if (msg.netmask)
-			tunif_set_netmask(data, msg.netmask);
+			tunif_set_netmask(ctx->data, msg.netmask);
 		if (msg.gw)
-			tunif_set_gw(data, msg.gw);
+			tunif_set_gw(ctx->data, msg.gw);
 		if (msg.mtu)
-			tunif_set_mtu(data, msg.mtu);
-		tunif_set_up(data);
+			tunif_set_mtu(ctx->data, msg.mtu);
+		tunif_set_up(ctx->data);
+		tun_ping_init(base, ctx, msg.gw);
 		break;
 
 	}

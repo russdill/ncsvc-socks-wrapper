@@ -1,6 +1,6 @@
 CC=gcc
 LWIP=$(HOME)/src/lwip
-CFLAGS=-fno-stack-protector -Wall -O2 -g -D_GNU_SOURCE -fPIC -I$(LWIP)/src/include
+CFLAGS=-fno-stack-protector -Wall -O2 -g -D_GNU_SOURCE -fPIC -I$(LWIP)/src/include/{ipv{4,6},}
 JAVA_32=$(shell java -version 2>&1 | grep -q "32-Bit" && echo -m32)
 
 LIB_SOURCES=\
@@ -18,6 +18,7 @@ system.c
 NCSVC_SOURCES=\
 md5.c \
 ncsvc_packet.c \
+ping.c \
 preload_ncsvc.c \
 route.c \
 resolv.c \
