@@ -1,6 +1,8 @@
 CC=gcc
 LWIP=$(HOME)/src/lwip
-CFLAGS=-fno-stack-protector -Wall -O2 -g -D_GNU_SOURCE -fPIC -I$(LWIP)/src/include/{ipv{4,6},}
+CFLAGS=-fno-stack-protector -Wall -O2 -g -D_GNU_SOURCE -fPIC
+CFLAGS+=-I$(LWIP)/src/include/ipv4 -I$(LWIP)/src/include/ipv6
+CFLAGS+=-I$(LWIP)/src/include
 JAVA_32=$(shell java -version 2>&1 | grep -q "32-Bit" && echo -m32)
 
 LIB_SOURCES=\
