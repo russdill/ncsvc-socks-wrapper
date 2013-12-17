@@ -15,6 +15,7 @@ import errno
 import argparse
 import atexit
 import signal
+import ConfigParser
 
 def mkdir_p(path):
     try:
@@ -26,9 +27,11 @@ def mkdir_p(path):
             raise
 
 class juniper_vpn_wrapper(object):
-    def __init__(self, vpn_host, username, socks_port):
+    def __init__(self, vpn_host, username, password, socks_port):
         self.vpn_host = vpn_host
         self.username = username
+        self.password = password
+        self.fixed_password = password is not None
         self.socks_port = socks_port
 
         self.br = mechanize.Browser()
@@ -55,7 +58,6 @@ class juniper_vpn_wrapper(object):
         self.br.addheaders = [('User-agent', self.user_agent)]
 
         self.last_action = None
-        self.password = None
         self.tncc_process = None
         self.needs_2factor = False
         self.key = None
@@ -144,8 +146,12 @@ class juniper_vpn_wrapper(object):
         # on the user.
 
         if self.password is None or self.last_action == 'login':
-            self.password = getpass.getpass('Password:')
-            self.needs_2factor = False
+            if self.fixed_password:
+                print 'Login failed (Invalid username or password?)'
+                sys.exit(1)
+            else:
+                self.password = getpass.getpass('Password:')
+                self.needs_2factor = False
 
         if self.needs_2factor:
             self.key = getpass.getpass('Two-factor key:')
@@ -323,16 +329,43 @@ def cleanup():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(conflict_handler='resolve')
-    parser.add_argument('-h', '--host', type=str, required=True,
+    parser.add_argument('-h', '--host', type=str,
                         help='VPN host name')
-    parser.add_argument('-u', '--user', type=str, required=True,
+    parser.add_argument('-u', '--user', type=str,
                         help='User name')
     parser.add_argument('-p', '--socks_port', type=int, default=1080,
                         help='Socks proxy port (default: %(default))')
+    parser.add_argument('-c', '--config', type=str,
+                        help='Config file for the script')
 
     args = parser.parse_args()
+    password = None
+
+    if args.config is not None:
+        config = ConfigParser.RawConfigParser()
+        config.read(args.config)
+        try:
+            args.user = config.get('vpn', 'username')
+        except:
+            pass
+        try:
+            args.host = config.get('vpn', 'host')
+        except:
+            pass
+        try:
+            password = config.get('vpn', 'password')
+        except:
+            pass
+        try:
+            args.socks_port = config.get('vpn', 'socks_port')
+        except:
+            pass
+
+    if args.user == None or args.host == None:
+        print "--user and --host are required parameters"
+        sys.exit(1)
 
     atexit.register(cleanup)
-    jvpn = juniper_vpn_wrapper(args.host, args.user, args.socks_port)
+    jvpn = juniper_vpn_wrapper(args.host, args.user, password, args.socks_port)
     jvpn.run()
 
