@@ -1,5 +1,5 @@
 CC=gcc
-LWIP=$(HOME)/src/lwip
+LWIP?=$(HOME)/src/lwip
 CFLAGS=-fno-stack-protector -Wall -O2 -g -D_GNU_SOURCE -fPIC
 CFLAGS+=-I$(LWIP)/src/include/ipv4 -I$(LWIP)/src/include/ipv6
 CFLAGS+=-I$(LWIP)/src/include
