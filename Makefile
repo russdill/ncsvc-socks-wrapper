@@ -3,7 +3,8 @@ LWIP?=$(HOME)/src/lwip
 CFLAGS=-fno-stack-protector -Wall -O2 -g -D_GNU_SOURCE -fPIC
 CFLAGS+=-I$(LWIP)/src/include/ipv4 -I$(LWIP)/src/include/ipv6
 CFLAGS+=-I$(LWIP)/src/include
-JAVA_32=$(shell java -version 2>&1 | grep -q "32-Bit" && echo -m32)
+JAVA_32=$(shell java -d64 -version 2>&1 |\
+	 grep -q "is not supported on this platform" && echo -m32)
 
 LIB_SOURCES=\
 fd.c \
