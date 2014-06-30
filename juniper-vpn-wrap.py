@@ -16,6 +16,10 @@ import argparse
 import atexit
 import signal
 import ConfigParser
+import time
+import binascii
+import hmac
+import hashlib
 
 def mkdir_p(path):
     try:
@@ -25,12 +29,50 @@ def mkdir_p(path):
             pass
         else:
             raise
+"""
+OATH code from https://github.com/bdauvergne/python-oath
+Copyright 2010, Benjamin Dauvergne
+
+* All rights reserved.
+* Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+     * Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+     * Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.'''
+"""
+
+def truncated_value(h):
+    bytes = map(ord, h)
+    offset = bytes[-1] & 0xf
+    v = (bytes[offset] & 0x7f) << 24 | (bytes[offset+1] & 0xff) << 16 | \
+            (bytes[offset+2] & 0xff) << 8 | (bytes[offset+3] & 0xff)
+    return v
+
+def dec(h,p):
+    v = truncated_value(h)
+    v = v % (10**p)
+    return '%0*d' % (p, v)
+
+def int2beint64(i):
+    hex_counter = hex(long(i))[2:-1]
+    hex_counter = '0' * (16 - len(hex_counter)) + hex_counter
+    bin_counter = binascii.unhexlify(hex_counter)
+    return bin_counter
+
+def hotp(key):
+    key = binascii.unhexlify(key)
+    counter = int2beint64(int(time.time()) / 30)
+    return dec(hmac.new(key, counter, hashlib.sha256).digest(), 6)
 
 class juniper_vpn_wrapper(object):
-    def __init__(self, vpn_host, username, password, socks_port):
+    def __init__(self, vpn_host, username, password, oath, socks_port):
         self.vpn_host = vpn_host
         self.username = username
         self.password = password
+        self.oath = oath
         self.fixed_password = password is not None
         self.socks_port = socks_port
 
@@ -154,7 +196,10 @@ class juniper_vpn_wrapper(object):
                 self.needs_2factor = False
 
         if self.needs_2factor:
-            self.key = getpass.getpass('Two-factor key:')
+            if self.oath:
+                self.key = hotp(self.oath)
+            else:
+                self.key = getpass.getpass('Two-factor key:')
         else:
             self.key = None
 
@@ -170,7 +215,12 @@ class juniper_vpn_wrapper(object):
     def action_key(self):
         # Enter key
         self.needs_2factor = True
-        if self.key is None:
+        if self.oath:
+            if self.last_action == 'key':
+                print 'Login failed (Invalid OATH key)'
+                sys.exit(1)
+            self.key = hotp(self.oath)
+        elif self.key is None:
             self.key = getpass.getpass('Two-factor key:')
         self.br.select_form(nr=0)
         self.br.form['password'] = self.key
@@ -333,6 +383,8 @@ if __name__ == "__main__":
                         help='VPN host name')
     parser.add_argument('-u', '--user', type=str,
                         help='User name')
+    parser.add_argument('-o', '--oath', type=str,
+                        help='OATH key for two factor authentication (hex)')
     parser.add_argument('-p', '--socks_port', type=int, default=1080,
                         help='Socks proxy port (default: %(default))')
     parser.add_argument('-c', '--config', type=str,
@@ -340,6 +392,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     password = None
+    oath = None
 
     if args.config is not None:
         config = ConfigParser.RawConfigParser()
@@ -357,6 +410,10 @@ if __name__ == "__main__":
         except:
             pass
         try:
+            oath = config.get('vpn', 'oath')
+        except:
+            pass
+        try:
             args.socks_port = config.get('vpn', 'socks_port')
         except:
             pass
@@ -366,6 +423,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     atexit.register(cleanup)
-    jvpn = juniper_vpn_wrapper(args.host, args.user, password, args.socks_port)
+    jvpn = juniper_vpn_wrapper(args.host, args.user, password, oath, args.socks_port)
     jvpn.run()
 
