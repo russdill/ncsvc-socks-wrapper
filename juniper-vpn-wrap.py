@@ -298,7 +298,7 @@ class juniper_vpn_wrapper(object):
 
     def tncc_start(self):
         # tncc is the host checker app. It can check different
-        # secrurity policies of the host and report back. We have
+        # security policies of the host and report back. We have
         # to send it a preauth key (from the DSPREAUTH cookie)
         # and it sends back a new cookie value we submit.
         # After logging in, we send back another cookie to tncc.
