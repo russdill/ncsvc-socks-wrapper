@@ -75,6 +75,7 @@ class juniper_vpn_wrapper(object):
         self.oath = oath
         self.fixed_password = password is not None
         self.socks_port = socks_port
+        self.last_ncsvc = 0
 
         self.br = mechanize.Browser()
 
@@ -358,6 +359,13 @@ class juniper_vpn_wrapper(object):
     def ncsvc_start(self):
         if self.ncsvc_bin is None:
             self.ncsvc_init()
+
+        now = time.time()
+        delay = 10.0 - (now - self.last_ncsvc)
+        if delay > 0:
+            print 'Waiting %.0f...' % (delay)
+            time.sleep(delay)
+        self.last_ncsvc = time.time();
 
         dsid_cookie = self.find_cookie('DSID')
         p = subprocess.Popen([self.ncsvc_bin,
