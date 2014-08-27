@@ -69,6 +69,7 @@ void tun_ifconfig(u_int32_t ip, u_int32_t gw, u_int32_t netmask, int mtu)
 		.mtu = mtu
 	};
 	dbg("%s\n", __func__);
+	pthread_mutex_lock(&tun_msg_mutex);
 	if (write(tun_msg_fd, &msg, sizeof(msg)) < 0)
 		dbg("%s: write failed\n", __func__);
 
