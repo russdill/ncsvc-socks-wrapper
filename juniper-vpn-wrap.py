@@ -76,6 +76,10 @@ class juniper_vpn_wrapper(object):
         self.fixed_password = password is not None
         self.socks_port = socks_port
         self.last_ncsvc = 0
+        self.plugin_jar = '/usr/share/icedtea-web/plugin.jar'
+
+        if not os.path.isfile(self.plugin_jar):
+            raise Exception(self.plugin_jar + ' not found')
 
         self.br = mechanize.Browser()
 
@@ -313,7 +317,8 @@ class juniper_vpn_wrapper(object):
         null = open(os.devnull, 'w')
 
         self.tncc_process = subprocess.Popen(['java',
-            '-classpath', self.tncc_jar, self.class_name,
+            '-classpath', self.tncc_jar + ':' + self.plugin_jar,
+            self.class_name,
             'log_level', '2',
             'postRetries', '6',
             'ivehost', self.vpn_host,
