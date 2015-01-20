@@ -10,6 +10,7 @@
 #include <event2/buffer.h>
 
 #include <netif/tunif.h>
+#include <lwip/socks.h>
 
 #include "unaligned.h"
 #include "ncsvc_main.h"
@@ -365,6 +366,15 @@ rpc_get_ip(char *data, int len)
 	return len == 4 ? get_unaligned((unsigned long *) data) : 0;
 }
 
+static char *
+rpc_get_str(char *data, int len)
+{
+	char *ret = malloc(len + 1);
+	memcpy(ret, data, len);
+	ret[len] = '\0';
+	return ret;
+}
+
 static int mtu;
 static u_int32_t ip;
 static u_int32_t gw;
@@ -422,7 +432,10 @@ static void
 ncsvc_process_dns(char *data, u_int32_t len)
 {
 	char *end = data + len;
+	char *search;
+	char *str;
 	tunif_clear_dns();
+	socks_clear_search();
 	dbg("%s\n", __func__);
 	while (data < end) {
 		u_int16_t idx;
@@ -435,6 +448,21 @@ ncsvc_process_dns(char *data, u_int32_t len)
 		switch (idx) {
 		case 1:
 			tunif_add_dns(rpc_get_ip(data, len));
+			break;
+		case 2:
+			search = rpc_get_str(data, len);
+			if (!search)
+				break;
+			while ((str = strchr(search, ','))) {
+				str[0] = '\0';
+				str++;
+				socks_add_search(search);
+				search = strdup(str);
+			}
+			if (search[0])
+				socks_add_search(search);
+			else
+				free(search);
 			break;
 		}
 		data += len;
