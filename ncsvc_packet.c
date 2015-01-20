@@ -333,36 +333,36 @@ packet_send(struct bufferevent *bev, struct packet_builder *pb)
 
 #ifdef DEBUG
 static u_char
-rpc_get_u8(char *data)
+rpc_get_u8(char *data, int len)
 {
-	return *data;
+	return len ? *data : '\0';
 }
 #endif
 
 static u_int16_t
-rpc_get_u16(char *data)
+rpc_get_u16(char *data, int len)
 {
-	return __get_unaligned_be((u_int16_t *) data);
+	return len == 2 ? __get_unaligned_be((u_int16_t *) data) : 0;
 }
 
 static u_int32_t
-rpc_get_u32(char *data)
+rpc_get_u32(char *data, int len)
 {
-	return __get_unaligned_be((u_int32_t *) data);
+	return len == 4 ? __get_unaligned_be((u_int32_t *) data) : 0;
 }
 
 #ifdef DEBUG
 static u_int64_t
-rpc_get_u64(char *data)
+rpc_get_u64(char *data, int len)
 {
-	return __get_unaligned_be((u_int64_t *) data);
+	return len == 8 ? __get_unaligned_be((u_int64_t *) data) : 0;
 }
 #endif
 
 static u_int32_t
-rpc_get_ip(char *data)
+rpc_get_ip(char *data, int len)
 {
-	return get_unaligned((unsigned long *) data);
+	return len == 4 ? get_unaligned((unsigned long *) data) : 0;
 }
 
 static int mtu;
@@ -379,13 +379,13 @@ ncsvc_process_mtu(char *data, u_int32_t len)
 		u_int16_t idx;
 		u_int32_t len;
 
-		idx = rpc_get_u16(data);
-		len = rpc_get_u32(data + 2);
+		idx = rpc_get_u16(data, 2);
+		len = rpc_get_u32(data + 2, 4);
 		data += 6;
 
 		switch (idx) {
 		case 2:
-			mtu = rpc_get_u32(data);
+			mtu = rpc_get_u32(data, len);
 		}
 		data += len;
 	}
@@ -400,19 +400,19 @@ ncsvc_process_interface(char *data, u_int32_t len)
 		u_int16_t idx;
 		u_int32_t len;
 
-		idx = rpc_get_u16(data);
-		len = rpc_get_u32(data + 2);
+		idx = rpc_get_u16(data, 2);
+		len = rpc_get_u32(data + 2, 4);
 		data += 6;
 
 		switch (idx) {
 		case 1:
-			ip = rpc_get_ip(data);
+			ip = rpc_get_ip(data, len);
 			break;
 		case 2:
-			netmask = rpc_get_ip(data);
+			netmask = rpc_get_ip(data, len);
 			break;
 		case 3:
-			gw = rpc_get_ip(data);
+			gw = rpc_get_ip(data, len);
 		}
 		data += len;
 	}
@@ -428,13 +428,14 @@ ncsvc_process_dns(char *data, u_int32_t len)
 		u_int16_t idx;
 		u_int32_t len;
 
-		idx = rpc_get_u16(data);
-		len = rpc_get_u32(data + 2);
+		idx = rpc_get_u16(data, 2);
+		len = rpc_get_u32(data + 2, 4);
 		data += 6;
 
 		switch (idx) {
 		case 1:
-			tunif_add_dns(rpc_get_ip(data));
+			tunif_add_dns(rpc_get_ip(data, len));
+			break;
 		}
 		data += len;
 	}
@@ -451,13 +452,13 @@ ncsvc_process_disconnect(char *data, u_int32_t len)
 		u_int16_t idx;
 		u_int32_t len;
 
-		idx = rpc_get_u16(data);
-		len = rpc_get_u32(data + 2);
+		idx = rpc_get_u16(data, 2);
+		len = rpc_get_u32(data + 2, 4);
 		data += 6;
 
 		switch (idx) {
 		case 1:
-			ret = rpc_get_u32(data);
+			ret = rpc_get_u32(data, len);
 		}
 		data += len;
 	}
@@ -488,8 +489,8 @@ ncsvc_print_packet(struct packet_hdr *hdr, char *data)
 		const struct msg_rpc *rpc_msg;
 		int first;
 
-		id = rpc_get_u16(data);
-		len = rpc_get_u32(data + 2);
+		id = rpc_get_u16(data, 2);
+		len = rpc_get_u32(data + 2, 4);
 		data += 6;
 
 		rpc_msg = NULL;
@@ -511,16 +512,25 @@ ncsvc_print_packet(struct packet_hdr *hdr, char *data)
 			u_int16_t idx;
 			u_int32_t idx_len;
 			const struct field *field = NULL;
-			char tok_buf[20];
+			char tok_buf[80];
 			char key_buf[10];
 			char *tok;
 			char *key;
+			u_int32_t slen;
+			u_int32_t rem;
 			struct in_addr addr;
 			int j;
 
-			idx = rpc_get_u16(idx_data);
-			idx_len = rpc_get_u32(idx_data + 2);
+			if (idx_data + 6 > data)
+				break;
+
+			idx = rpc_get_u16(idx_data, 2);
+			idx_len = rpc_get_u32(idx_data + 2, 4);
 			idx_data += 6;
+
+			rem = data - idx_data;
+			if (idx_len > rem)
+				break;
 
 			for (j = 0; rpc_msg && rpc_msg->fields[j].typ != END; j++)
 				if (rpc_msg->fields[j].idx == idx) {
@@ -538,20 +548,23 @@ ncsvc_print_packet(struct packet_hdr *hdr, char *data)
 			tok = tok_buf;
 			switch (field ? field->typ : END) {
 			case IPADDR:
-				addr.s_addr = rpc_get_ip(idx_data);
+				addr.s_addr = rpc_get_ip(idx_data, idx_len);
 				inet_ntop(AF_INET, &addr, tok_buf, sizeof(tok_buf));
 				break;
 			case STR:
-				tok = idx_data;
+				slen = idx_len;
+				if (slen > sizeof(tok_buf))
+					slen = sizeof(tok_buf);
+				snprintf(tok_buf, slen, "%s", idx_data);
 				break;
 			case U8:
-				sprintf(tok_buf, "%d", rpc_get_u8(idx_data));
+				sprintf(tok_buf, "%d", rpc_get_u8(idx_data, idx_len));
 				break;
 			case U32:
-				sprintf(tok_buf, "%d", rpc_get_u32(idx_data));
+				sprintf(tok_buf, "%d", rpc_get_u32(idx_data, idx_len));
 				break;
 			case U64:
-				sprintf(tok_buf, "%lld", rpc_get_u64(idx_data));
+				sprintf(tok_buf, "%lld", rpc_get_u64(idx_data, idx_len));
 				break;
 			default:
 				sprintf(tok_buf, "(Unknown type)");
@@ -610,9 +623,18 @@ ncsvc_process_packet(struct bufferevent *bev, struct packet_hdr *hdr, char *data
 	while (data < end) {
 		u_int16_t id;
 		u_int32_t len;
-		id = rpc_get_u16(data);
-		len = rpc_get_u32(data + 2);
+		u_int32_t rem;
+
+		if (data + 6 > end)
+			break;
+
+		id = rpc_get_u16(data, 2);
+		len = rpc_get_u32(data + 2, 4);
 		data += 6;
+
+		rem = end - data;
+		if (len > rem)
+			break;
 
 		switch (id) {
 		case RPC_MTU:
@@ -647,7 +669,7 @@ ncsvc_packet_read(struct bufferevent *bev, void *ctx)
 	struct evbuffer *buf;
 	struct packet_hdr *hdr;
 	struct evbuffer_iovec vec_out;
-	unsigned int len;
+	size_t len;
 
 	buf = bufferevent_get_input(data->bev);
 
