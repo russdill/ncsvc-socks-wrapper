@@ -21,6 +21,8 @@ import binascii
 import hmac
 import hashlib
 
+ssl._create_default_https_context = ssl._create_unverified_context
+
 def mkdir_p(path):
     try:
         os.mkdir(path)
