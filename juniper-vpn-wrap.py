@@ -20,6 +20,7 @@ import time
 import binascii
 import hmac
 import hashlib
+import tncc
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -70,13 +71,14 @@ def hotp(key):
     return dec(hmac.new(key, counter, hashlib.sha256).digest(), 6)
 
 class juniper_vpn_wrapper(object):
-    def __init__(self, vpn_host, username, password, oath, socks_port):
+    def __init__(self, vpn_host, username, password, oath, socks_port, host_checker):
         self.vpn_host = vpn_host
         self.username = username
         self.password = password
         self.oath = oath
         self.fixed_password = password is not None
         self.socks_port = socks_port
+        self.host_checker = host_checker
         self.last_ncsvc = 0
         self.plugin_jar = '/usr/share/icedtea-web/plugin.jar'
 
@@ -160,31 +162,36 @@ class juniper_vpn_wrapper(object):
             raise Exception('Could not find DSPREAUTH key for host checker')
 
         dssignin_cookie = self.find_cookie('DSSIGNIN')
-        dssignin = (dssignin_cookie.value if dssignin_cookie else 'null')
-
-        if not self.tncc_process:
-            self.tncc_start()
-
-        args = [('IC', self.vpn_host), ('Cookie', dspreauth_cookie.value), ('DSSIGNIN', dssignin)]
-
-        try:
-            self.tncc_send('start', args)
-            results = self.tncc_recv()
-        except:
-            self.tncc_start()
-            self.tncc_send('start', args)
-            results = self.tncc_recv()
-
-        if len(results) < 4:
-            raise Exception('tncc returned insufficent results', results)
-
-        if results[0] == '200':
-            dspreauth_cookie.value = results[2]
-            self.cj.set_cookie(dspreauth_cookie)
-        elif self.last_action == 'tncc':
-            raise Exception('tncc returned non 200 code (' + result[0] + ')')
+        if self.host_checker:
+            t = tncc.tncc(self.vpn_host);
+            self.cj.set_cookie(t.get_cookie(dspreauth_cookie, dssignin_cookie))
         else:
-            self.cj.clear(self.vpn_host, '/dana-na/', 'DSPREAUTH')
+
+		    dssignin = (dssignin_cookie.value if dssignin_cookie else 'null')
+
+		    if not self.tncc_process:
+		        self.tncc_start()
+
+		    args = [('IC', self.vpn_host), ('Cookie', dspreauth_cookie.value), ('DSSIGNIN', dssignin)]
+
+		    try:
+		        self.tncc_send('start', args)
+		        results = self.tncc_recv()
+		    except:
+		        self.tncc_start()
+		        self.tncc_send('start', args)
+		        results = self.tncc_recv()
+
+		    if len(results) < 4:
+		        raise Exception('tncc returned insufficent results', results)
+
+		    if results[0] == '200':
+		        dspreauth_cookie.value = results[2]
+		        self.cj.set_cookie(dspreauth_cookie)
+		    elif self.last_action == 'tncc':
+		        raise Exception('tncc returned non 200 code (' + result[0] + ')')
+		    else:
+		        self.cj.clear(self.vpn_host, '/dana-na/', 'DSPREAUTH')
 
         self.r = self.br.open(self.r.geturl())
 
@@ -241,7 +248,7 @@ class juniper_vpn_wrapper(object):
 
     def action_ncsvc(self):
         dspreauth_cookie = self.find_cookie('DSPREAUTH')
-        if dspreauth_cookie is not None:
+        if dspreauth_cookie is not None and not self.host_checker:
             try:
                 self.tncc_send('setcookie', [('Cookie', dspreauth_cookie.value)])
             except:
@@ -404,6 +411,8 @@ if __name__ == "__main__":
                         help='Socks proxy port (default: %(default))')
     parser.add_argument('-c', '--config', type=str,
                         help='Config file for the script')
+    parser.add_argument('-H', '--host-checker',
+                        help='Use build in host checker')
 
     args = parser.parse_args()
     password = None
@@ -432,12 +441,18 @@ if __name__ == "__main__":
             args.socks_port = config.get('vpn', 'socks_port')
         except:
             pass
+        try:
+            val = config.get('vpn', 'host_checker').lower()
+            if val in {'true', 'yes', 'on', 'enable', 'enabled', '1'}:
+                args.host_checker = True
+        except:
+            pass
 
     if args.user == None or args.host == None:
         print "--user and --host are required parameters"
         sys.exit(1)
 
     atexit.register(cleanup)
-    jvpn = juniper_vpn_wrapper(args.host, args.user, password, oath, args.socks_port)
+    jvpn = juniper_vpn_wrapper(args.host, args.user, password, oath, args.socks_port, args.host_checker)
     jvpn.run()
 
